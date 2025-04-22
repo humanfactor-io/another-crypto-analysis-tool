@@ -7,8 +7,8 @@ back‑tests, all reproducible in Docker.
 ---
 ## Disclaimers
 
-- Don't download and run shit you don't understand. Perform your own due diligence. 
-- Project not endorsed by @TheFlowHorse 
+- Don't download and run shit you don't understand. Perform your own due diligence.
+- All analysis files in In_Development require varying levels of work to complete.
 
 ## Features
 
