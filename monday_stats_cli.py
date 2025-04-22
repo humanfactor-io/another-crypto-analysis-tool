@@ -23,7 +23,8 @@ def _week_id(ts: pd.Series) -> pd.Series:
 #  Core calculations
 # ----------------------------------------------------------------------
 def build_monday_and_week_table(summary_df: pd.DataFrame,
-                                months_back: int = 6) -> pd.DataFrame:
+                                months_back: int = 6,
+                                drop_current_week: bool = True) -> pd.DataFrame:
     """
     Returns a DataFrame with Monday‑range and full‑week range per week_id.
     Monday highs/lows are *aggregated across all sessions* whose local
@@ -35,6 +36,13 @@ def build_monday_and_week_table(summary_df: pd.DataFrame,
     df = df[df["ex_ts"] >= since]
 
     df["week_id"] = _week_id(df["ex_ts"])
+
+    # Optionally remove the still‑in‑progress week so partial data
+    # doesn't bias stats (e.g. Monday appears as both High & Low).
+    if drop_current_week and not df.empty:
+        now_ex = _to_exchange_time(pd.Series([pd.Timestamp.utcnow()]))[0]
+        current_wk = _week_id(pd.Series([now_ex]))[0]
+        df = df[df["week_id"] < current_wk]
 
     # --- Monday extremes aggregated across sessions  ------------------
     mon_rows = df[df["ex_ts"].dt.weekday == 0]
@@ -62,7 +70,7 @@ def get_monday_stats(summary_df: pd.DataFrame,
         weekly_tbl – per‑week DataFrame (see build_monday_and_week_table)
         pct_dict   – dictionary of percentage statistics
     """
-    wk = build_monday_and_week_table(summary_df, months_back)
+    wk = build_monday_and_week_table(summary_df, months_back, drop_current_week=True)
 
     pct = {
         "pct_monday_is_weekly_high_low": 100*(wk["Mon_is_WkHigh"] & wk["Mon_is_WkLow"]).mean(),
@@ -74,6 +82,10 @@ def get_monday_stats(summary_df: pd.DataFrame,
     sess = summary_df.copy()
     sess["ex_ts"]   = _to_exchange_time(sess["SessionStart"])
     sess["week_id"] = _week_id(sess["ex_ts"])
+
+    # Keep only completed week_ids present in wk
+    valid_wks = set(wk["week_id"])
+    sess = sess[sess["week_id"].isin(valid_wks)]
 
     # Create mapping dicts to Monday highs/lows to avoid merge issues
     mon_high_map = wk.set_index('week_id')['MondayHigh']
