@@ -1,0 +1,89 @@
+strategy:
+  name: nPoC_tPoC_revisit_frequency_test
+  description: Lightweight verification of the back‑testing engine’s session tagging, PoC
+               calculations, and revisit tracking before introducing complex logic.
+
+  purpose_objective: |
+    1. Ensure correct session labelling (Asia, London, NewYork).
+    2. Validate accurate calculation of volume‑based nPoCs (SessionVPOC) and
+       time‑based tPoCs (TPO_POC).
+    3. Confirm the engine can detect when price revisits those PoCs in later
+       qualifying sessions.
+    4. Guarantee deterministic, repeatable outputs on identical replays of the
+       same date range.
+
+  prerequisites:
+    python_stack: "Python ≥ 3.11 with pandas, sqlite3, numpy"
+    database: "crypto_data.db ➜ table: session_summary (see schema)"
+    raw_ticks: "BTCUSDT_PERP_BINANCE_normalized.txt (for drill‑downs only)"
+    session_universe:
+      include: [Asia, London, NewYork]
+      exclude: [Overnight, Weekend‑Sat, Weekend‑Sun]
+    tolerance_ticks: 0.5      # ≈ $0.50 on BTC perp
+    clock: "All timestamps in UTC"
+
+  calculation_methodology:
+    - step: pull_sessions
+      sql: |
+        SELECT * FROM session_summary
+        WHERE Sessions IN ('Asia','London','NewYork')
+        ORDER BY SessionStart;
+    - step: identify_naked_pocs
+      description: >
+        Mark a PoC as “naked” in session S₀ if price never trades at that
+        PoC ± tolerance before S₀ closes.
+    - step: walk_forward_and_test_revisits
+      logic:
+        a: "From S₁ onward, test: SessionLow ≤ PoC + tol AND SessionHigh ≥ PoC – tol"
+        b: |
+          On first true hit:
+            • set Revisited = true
+            • record RevisitSession, SessionsElapsed, MinutesElapsed
+        c: "Stop tracking that PoC once revisited"
+    - step: persist_results
+      target_schema:
+        columns: [PoC_ID, Date, PoC_Type, PoC_Price, Revisited,
+                  SessionsElapsed, MinutesElapsed]
+      storage: "new table poc_revisits or in‑memory DataFrame"
+    - step: aggregate_report
+      python_snippet: |
+        report = df.groupby("PoC_Type").agg(
+            Total=("PoC_ID","count"),
+            Revisited=("Revisited","sum"),
+            AvgSessions=("SessionsElapsed","mean"),
+            AvgMinutes=("MinutesElapsed","mean"),
+            MaxMinutes=("MinutesElapsed","max")
+        )
+
+  expected_behaviour:
+    determinism: "Two identical replays must yield byte‑identical poc_revisits tables."
+    sanity_ratios:
+      nPoC_revisited_within_3_sessions: "65‑85 %"
+      tPoC_revisited_within_3_sessions: "70‑90 %"
+    temporal_bounds:
+      median_revisit_time_hours: "< 10"
+      outlier_flag_hours: 48
+    edge_cases_to_verify:
+      - extreme_session_delta_news_spikes
+      - half_session_holidays_and_short_trading_days
+
+  example_output: |
+    nPoC / tPoC REVISIT REPORT
+    Date range        : 2025‑01‑01 → 2025‑03‑31
+    Qual. sessions    : 545
+    Tolerance (ticks) : 0.5
+
+    ──────────────────────────────────────────────────────────────────────────────
+    PoC Type   Total  Revisited  %Hit≤1  %Hit≤3  %Still Naked  AvgSess  AvgMin
+    ──────────────────────────────────────────────────────────────────────────────
+    VOLUME     545    401        38.7    73.6    26.4          2.7      524
+    TIME       545    424        41.1    77.8    22.2          2.3      487
+    ──────────────────────────────────────────────────────────────────────────────
+    Longest‑naked VPOC : 2025‑02‑15 London  (3 days 7 h)
+    Longest‑naked tPOC : 2025‑02‑16 Asia    (2 days 19 h)
+    Fastest revisit    : 2025‑03‑05 NewYork → next session (43 min)
+
+  next_steps:
+    - parameterise_tolerance_and_session_filters
+    - add_monte_carlo_shuffle_test_for_false_edges
+    - extend_to_multi_factor_confluence (PoC + VWAP deviation + OI spikes)

@@ -1,0 +1,11 @@
+﻿# Python noise
+__pycache__/
+*.pyc
+
+# Big artefacts  NEVER commit
+base_data/
+filtered_data/
+db/
+*.db
+*.txt
+*.parquet
