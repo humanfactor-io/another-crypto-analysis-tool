@@ -39,6 +39,31 @@ def get_active_sessions(timestamp: pd.Timestamp):
                 active.append(name)
 
     return active
+# make psuedo dialy sessions from tick data to support 24-hour TPO analysis (currently used for Single Print Analysis)
+def make_daily_sessions(tick_df):
+    """
+    Return a DataFrame indexed by Date with columns:
+        SessionStart, SessionEnd, SessionHigh, SessionLow, ...
+    so that each calendar day behaves like a single 'session'.
+    """
+    # round Timestamp down to date (UTC)
+    tick_df["Date"] = tick_df["Timestamp"].dt.date
+
+    day_grp = tick_df.groupby("Date")
+    daily = day_grp.agg(
+        SessionStart=("Timestamp", "min"),
+        SessionEnd  =("Timestamp", "max"),
+        SessionOpen =("Open", "first"),
+        SessionHigh =("High", "max"),
+        SessionLow  =("Low", "min"),
+        SessionClose=("Close", "last"),
+        SessionVolume=("Volume", "sum"),
+    )
+    # make the index two‑level like (Date, 'FULLDAY') so existing
+    # calculate_tpo_metrics() expects ('Date','Sessions')
+    daily["Sessions"] = "FULLDAY"
+    daily = daily.set_index("Sessions", append=True)
+    return daily
 
 def load_and_preprocess_data(filename):
     """
@@ -542,31 +567,42 @@ def calculate_tpo_metrics(tick_df, session_df, tpo_period_minutes, price_step, v
             below are used.
             """
 
-            THRESH       = getattr(config, "SINGLE_PRINT_THRESHOLD", 3)
-            MIN_SPAN_USD = getattr(config, "SINGLE_PRINT_MIN_SPAN", 20.0)
+            THRESH      = getattr(config, "SINGLE_PRINT_THRESHOLD", 80)     # ≥ 8 USDT at 0.1‑step
+            MIN_SHARE   = getattr(config, "SINGLE_PRINT_MIN_SHARE", 0.30)   # ≥ 30 % of session range
 
             single_print_levels = valid_tpo_counts[valid_tpo_counts == 1].index.to_numpy()
             has_single_prints = False
+            sp_high_price = sp_low_price = np.nan
 
             if single_print_levels.size:
-                 # (a) longest almost‑consecutive run (allow one‑tick gaps)
-                 diffs      = np.diff(single_print_levels)
-                 tol        = price_step * 0.51
-                 consec     = 1
-                 max_consec = 1
+                 # (a) longest almost‑consecutive run (allow 1‑tick gaps)
+                 diffs  = np.diff(single_print_levels)
+                 consec = max_consec = 1
                  for d in diffs:
-                      if d <= price_step + tol:   # 0 or 1 tick gap
-                           consec += 1
-                      else:
-                           max_consec = max(max_consec, consec)
-                           consec = 1
+                     if d <= price_step * 1.51:   # 0 or 1 tick gap
+                         consec += 1
+                     else:
+                         max_consec = max(max_consec, consec)
+                         consec = 1
                  max_consec = max(max_consec, consec)
 
-                 # (b) span of entire single‑print region
-                 span_usd = single_print_levels[-1] - single_print_levels[0] if single_print_levels.size > 1 else 0.0
+                 # (b) strip coverage (% of full session range)
+                 span_usd  = single_print_levels[-1] - single_print_levels[0]
+                 sess_rng  = session_high_price - session_low_price
+                 coverage  = span_usd / sess_rng if sess_rng else 0
 
-                 if (max_consec >= THRESH) or (span_usd >= MIN_SPAN_USD):
+                 # (c) keep only mid‑profile singles (avoid edge fluff)
+                 mid_band_mask = (
+                     (single_print_levels > val_level + 5 * price_step) &
+                     (single_print_levels < vah_level - 5 * price_step)
+                 )
+
+                 if mid_band_mask.any() and \
+                    (max_consec >= THRESH) and \
+                    (coverage  >= MIN_SHARE):
                       has_single_prints = True
+                      sp_high_price = float(single_print_levels[mid_band_mask].max())
+                      sp_low_price  = float(single_print_levels[mid_band_mask].min())
             # ── END SP DETECT ───────────────────────────────────────────
 
             # Determine high/low price of single‑print region if detected
