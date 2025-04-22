@@ -569,6 +569,13 @@ def calculate_tpo_metrics(tick_df, session_df, tpo_period_minutes, price_step, v
                       has_single_prints = True
             # ── END SP DETECT ───────────────────────────────────────────
 
+            # Determine high/low price of single‑print region if detected
+            sp_high_price = np.nan
+            sp_low_price  = np.nan
+            if has_single_prints:
+                sp_high_price = float(single_print_levels.max()) if single_print_levels.size else np.nan
+                sp_low_price  = float(single_print_levels.min()) if single_print_levels.size else np.nan
+
         tpo_results[(date, session_name)] = {
             'TPO_POC': tpo_poc_level,
             'VAH': vah_level,
@@ -579,7 +586,9 @@ def calculate_tpo_metrics(tick_df, session_df, tpo_period_minutes, price_step, v
             'PoorHighPrice': poor_high_price,
             'PoorLow': is_poor_low,
             'PoorLowPrice': poor_low_price,
-            'SinglePrints': has_single_prints
+            'SinglePrints': has_single_prints,
+            'SP_High': sp_high_price,
+            'SP_Low': sp_low_price
         }
         
         debug_first_session = False # Disable debug prints after first session
