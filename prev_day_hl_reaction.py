@@ -89,12 +89,18 @@ def calc_reaction_stats(daily_df: pd.DataFrame, session_df: pd.DataFrame, months
     sess["touch_high"] = sess["SessionHigh"] >= sess["prev_high"] - tol
     sess["touch_low"] = sess["SessionLow"] <= sess["prev_low"] + tol
 
+    # Measure maximum excursion beyond the level (overshoot)
+    sess["exc_high"] = np.where(sess["touch_high"], sess["SessionHigh"] - sess["prev_high"], np.nan)
+    sess["exc_low"]  = np.where(sess["touch_low"],  sess["prev_low"]  - sess["SessionLow"],  np.nan)
+
     grp = sess.groupby("Sessions")
     stats = pd.DataFrame({
         "SampleSize": grp.size(),
         "PctPrevHigh": 100 * grp["touch_high"].mean(),
         "PctPrevLow":  100 * grp["touch_low"].mean(),
         "PctBoth":     100 * grp.apply(lambda g: (g["touch_high"] & g["touch_low"]).mean()),
+        "AvgExcHigh":  grp["exc_high"].mean(),   # average overshoot when prev high touched
+        "AvgExcLow":   grp["exc_low"].mean(),    # average overshoot when prev low touched
     }).reset_index().sort_values("Sessions")
 
     return stats, sess
